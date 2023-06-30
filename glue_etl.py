@@ -19,7 +19,7 @@ spark = glueContext.spark_session
 job = Job(glueContext)
 job.init(args['JOB_NAME'], args)
 
-
+print(f"Database name: {args['db_name']}, table_name: {args['table_name']}, bucket: {args['target_bucket']}")
 source_data = glueContext.create_dynamic_frame.from_catalog(database=args['db_name'], table_name=args['table_name'])
 transformer = glueContext.write_dynamic_frame.from_options(frame=source_data,
                                                            connection_type='s3',
