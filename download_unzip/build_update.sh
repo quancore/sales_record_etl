@@ -1,4 +1,5 @@
-# Bash script to build a container for lambda function, push to AWS ECR repo and update related lambda functions with latest container
+# Bash script to build a container for lambda functions, push container to AWS ECR repo and update related lambda functions with latest container
+
 REGISTRY_URL="448303281314.dkr.ecr.eu-central-1.amazonaws.com"
 REPO_NAME="download_unzip"
 TAG="latest"
@@ -14,4 +15,3 @@ aws lambda update-function-code \
 aws lambda update-function-code \
            --function-name unzip \
            --image-uri $REGISTRY_URL/$REPO_NAME:$TAG
-

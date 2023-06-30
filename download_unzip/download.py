@@ -14,7 +14,7 @@ headers = {
 
 BUCKET_NAME = os.environ.get("BUCKET_NAME", "sale-record")
 URL = os.environ.get("URL", "https://eforexcel.com/wp/wp-content/uploads/2020/09/2m-Sales-Records.zip")
-CONTENT_KEY = os.environ.get("CONTENT_KEY", "original_sales_record.zip")
+CONTENT_KEY = os.environ.get("CONTENT_KEY", "data/original_sales_record.zip")
 s3_resource = resource('s3')
 
 
