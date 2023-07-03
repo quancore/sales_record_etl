@@ -1,3 +1,4 @@
+# Common Dockerfile for AWS lambda functions
 FROM public.ecr.aws/lambda/python:3.9
 
 RUN yum update -y && yum install -y wget && yum clean all
@@ -15,4 +16,5 @@ RUN mv /var/lang/bin/python3.9 /var/lang/bin/python3.9-clean && ln -sf /opt/cond
 COPY download.py unzip.py /opt/my-code/
 ENV PYTHONPATH "/var/lang/lib/python3.9/site-packages:/opt/my-code"
 
+# default entry point for download lambda function, will be overloaded for unzip lambda function on runtime
 CMD ["download.lambda_handler"]

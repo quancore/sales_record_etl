@@ -1,0 +1,232 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "Cloudformation template for sales data ETL"
+Parameters:
+  ArtifactBucketName:
+    Type: String
+    Description: "Name of the S3 bucket in which the Sales ETL scripts reside. Bucket is NOT created by this CFT."
+    Default: "sale-record-script"
+  DataBucketName:
+    Description: "Name of the S3 bucket in which the source Sales data will be uploaded. Bucket is created by this CFT."
+    Type: String
+    Default: "sale-record"
+  InputURL:
+    Description: "Input URL for zip object"
+    Type: String
+    Default: "https://eforexcel.com/wp/wp-content/uploads/2020/09/2m-Sales-Records.zip"
+  S3DataPrefix:
+    Description: "The S3 prefix to store raw and processed data"
+    Type: String
+    Default: "data"
+Resources:
+    DataBucket:
+      Type: AWS::S3::Bucket
+      Properties:
+        BucketName: !Ref DataBucketName
+        DeletionPolicy: Delete
+        NotificationConfiguration:
+          LambdaConfigurations:
+            - Event: 's3:ObjectCreated:CompleteMultipartUpload'
+              Filter:
+                S3Key:
+                  Rules:
+                    - Name: prefix
+                      Value: !Sub "${S3DataPrefix}/"
+                    - Name: suffix
+                      Value: .zip
+              Function: !GetAtt LambdaFunction2.Arn
+
+    ArtifactBucket:
+      Type: AWS::S3::Bucket
+      DeletionPolicy: Retain
+      Properties:
+        BucketName: !Ref ArtifactBucketName
+
+    LambdaFunction:
+        Type: "AWS::Lambda::Function"
+        Properties:
+            Description: ""
+            Environment:
+                Variables:
+                    KMS_KEY_ID: !Sub "arn:aws:kms:${AWS::Region}:${AWS::AccountId}:key/90bff223-68da-45ba-8d1a-58a131fc0b06"
+                    CONTENT_KEY: !Sub "${S3DataPrefix}/original_sales_record.zip"
+                    BUCKET_NAME: !Ref DataBucketName
+                    URL: !Ref InputURL
+            FunctionName: "download"
+            Architectures:
+              - "x86_64"
+            Code:
+                ImageUri: !Sub "${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/download_${LambdaFunction2}:latest"
+            MemorySize: 512
+            Role: !Sub "arn:aws:iam::${AWS::AccountId}:role/download_${LambdaFunction2}"
+            Timeout: 120
+            TracingConfig:
+                Mode: "PassThrough"
+            EphemeralStorage:
+                Size: 512
+            PackageType: "Image"
+
+    LambdaFunction2:
+        Type: "AWS::Lambda::Function"
+        Properties:
+            Description: ""
+            Environment:
+                Variables:
+                    WORKFLOW_NAME: "sales_etl"
+                    FILE_PREFIX: !Sub "${S3DataPrefix}/csv"
+            FunctionName: "unzip"
+            Architectures:
+              - "x86_64"
+            Code:
+                ImageUri: !Sub "${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${IAMRole}:latest"
+            ImageConfig:
+                Command:
+                    - "unzip.lambda_handler"
+            MemorySize: 512
+            Role: !GetAtt IAMRole.Arn
+            Timeout: 120
+            TracingConfig:
+                Mode: "PassThrough"
+            EphemeralStorage:
+                Size: 512
+            PackageType: "Image"
+
+    LambdaPermission:
+        Type: "AWS::Lambda::Permission"
+        Properties:
+            Action: "lambda:InvokeFunction"
+            FunctionName: !GetAtt LambdaFunction2.Arn
+            Principal: "s3.amazonaws.com"
+            SourceArn: !Sub "arn:aws:s3:::${DataBucketName}"
+
+    ECRRepository:
+        Type: "AWS::ECR::Repository"
+        DeletionPolicy: Retain
+        Properties:
+            RepositoryName: !Sub "${LambdaFunction}_${LambdaFunction2}"
+            LifecyclePolicy:
+                RegistryId: !Ref AWS::AccountId
+
+    GlueDatabase:
+        Type: "AWS::Glue::Database"
+        Properties:
+            DatabaseInput:
+                Name: "sale_etl"
+            CatalogId: !Ref "AWS::AccountId"
+
+    GlueJob:
+      Type: "AWS::Glue::Job"
+      Properties:
+        Name: "sales_convert_partition"
+        Description: ""
+        Role: !GetAtt IAMRole2.Arn
+        ExecutionProperty:
+          MaxConcurrentRuns: 1
+        Command:
+          Name: "glueetl"
+          ScriptLocation: "../glue/glue_convert_partition.py"
+          PythonVersion: "3"
+        DefaultArguments:
+          --enable-metrics: "true"
+          --enable-spark-ui: "true"
+          --spark-event-logs-path: !Sub "s3://${DataBucketName}/aws_glue/sparkHistoryLogs/"
+          --enable-job-insights: "true"
+          --target_path: !Sub "s3://${DataBucketName}/${S3DataPrefix}/parquet/"
+          --enable-glue-datacatalog: "true"
+          --enable-continuous-cloudwatch-log: "true"
+          --job-bookmark-option: "job-bookmark-disable"
+          --job-language: "python"
+          --TempDir: !Sub "s3://${DataBucketName}/aws_glue/temporary/"
+          --source_path: !Sub "s3://${DataBucketName}/${S3DataPrefix}/csv/"
+          --partition_path: !Sub "s3://${DataBucketName}/${S3DataPrefix}/partitions/"
+        MaxRetries: 0
+        Timeout: 2880
+        GlueVersion: "3.0"
+        NumberOfWorkers: 10
+        WorkerType: "G.1X"
+
+    GlueCrawler:
+        Type: "AWS::Glue::Crawler"
+        Properties:
+            Name: "sale_crawler"
+            Role: !Ref IAMRole2
+            Targets:
+                S3Targets:
+                  -
+                    Path: !Sub "s3://${DataBucketName}/${S3DataPrefix}/partitions"
+            DatabaseName: "sale_etl"
+            SchemaChangePolicy:
+                UpdateBehavior: "UPDATE_IN_DATABASE"
+                DeleteBehavior: "DEPRECATE_IN_DATABASE"
+            Configuration: "{\"Version\":1.0,\"CreatePartitionIndex\":true}"
+        DependsOn:
+          - DataBucket
+
+    GlueTrigger:
+        Type: "AWS::Glue::Trigger"
+        Properties:
+            Name: "crawler_trigger"
+            Type: "CONDITIONAL"
+            WorkflowName: "sales_etl"
+            StartOnCreation: true
+            Actions:
+              -
+                CrawlerName: "sale_crawler"
+            Predicate:
+                Logical: "ANY"
+                Conditions:
+                  -
+                    LogicalOperator: "EQUALS"
+                    JobName: "sales_convert_partition"
+                    State: "SUCCEEDED"
+        DependsOn :
+          - GlueJob
+          - GlueCrawler
+
+    GlueTrigger2:
+        Type: "AWS::Glue::Trigger"
+        Properties:
+            Name: "workflow_trigger"
+            Type: "ON_DEMAND"
+            WorkflowName: "sales_etl"
+            StartOnCreation: false
+            Actions:
+              -
+                JobName: "sales_convert_partition"
+        DependsOn : GlueJob
+
+    GlueWorkflow:
+        Type: "AWS::Glue::Workflow"
+        Properties:
+            Name: "sales_etl"
+            DefaultRunProperties: {}
+
+    IAMRole:
+        Type: "AWS::IAM::Role"
+        Properties:
+            Path: "/"
+            RoleName: "download_unzip"
+            AssumeRolePolicyDocument: "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Principal\":{\"Service\":\"lambda.amazonaws.com\"},\"Action\":\"sts:AssumeRole\"}]}"
+            MaxSessionDuration: 3600
+            ManagedPolicyArns:
+              - "arn:aws:iam::aws:policy/service-role/AWSGlueServiceRole"
+              - "arn:aws:iam::aws:policy/CloudWatchFullAccess"
+              - "arn:aws:iam::aws:policy/AmazonS3FullAccess"
+              - "arn:aws:iam::aws:policy/AWSLambda_FullAccess"
+              - "arn:aws:iam::aws:policy/service-role/AmazonS3ObjectLambdaExecutionRolePolicy"
+            Description: "Allows Lambda functions to call AWS services on your behalf."
+
+    IAMRole2:
+        Type: "AWS::IAM::Role"
+        Properties:
+            Path: "/"
+            RoleName: "ETL"
+            AssumeRolePolicyDocument: "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Principal\":{\"Service\":\"glue.amazonaws.com\"},\"Action\":\"sts:AssumeRole\"}]}"
+            MaxSessionDuration: 3600
+            ManagedPolicyArns:
+              - "arn:aws:iam::aws:policy/CloudWatchLogsFullAccess"
+              - "arn:aws:iam::aws:policy/service-role/AWSGlueServiceRole"
+              - "arn:aws:iam::aws:policy/CloudWatchFullAccess"
+              - "arn:aws:iam::aws:policy/AWSGlueConsoleFullAccess"
+              - "arn:aws:iam::aws:policy/AmazonS3FullAccess"
+              - "arn:aws:iam::aws:policy/AWSGlueSchemaRegistryFullAccess"
+            Description: "Allows Glue to call AWS services on your behalf. "

@@ -9,5 +9,11 @@ contains all the relevant AWS resources.
 ## Proposed solution
 ![solution](./img/sales_etl.png)
 
-- **downloa_unzip**: This is a directory which includes a docker file spesification. Docker container will be used in common for two different AWS lambda functions called __download.py__ and __unzip.py__ with different entrypoints.
-- **glue_convert_partition.py**: This is a Python script to specify AWS Glue ETL job on PySpark.
+- **download_unzip_lambda**: This is a directory which includes lambda functions. Directory includes:
+  - A common Dockerfile specification for lambda functions.
+  - AWS lambda functions called __download.py__ and __unzip.py__ with different entrypoints.
+- **glue**: This is a directory which includes a Python script called **glue_convert_partition.py** to specify AWS Glue ETL job on PySpark.
+- **cloudformation**: This is a directory which includes scripts for deploying Cloudformation templates.
+  - **cloudformation.yaml**: Initial Cloudformation template.
+  - **cloudformation_s3_ecr.yaml**: Cloudformation template which includes codebase components (artifact S3, ECR) which will be used to create a change set on the stack.
+  - **deploy_cloudformation.sh**: A end-to-end bash script to deploy cloudformation stack.
